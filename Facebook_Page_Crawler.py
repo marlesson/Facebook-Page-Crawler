@@ -3,6 +3,10 @@ import argparse, sys
 from datetime import datetime
 
 from multiprocessing import Pool
+import sys
+
+iMaxStackSize = 100000
+sys.setrecursionlimit(iMaxStackSize)
 
 ##########################################################################################################
 def getRequests(url):
@@ -17,17 +21,26 @@ def getFeedIds(feeds, feed_list):
 
     feeds = feeds['feed'] if 'feed' in feeds else feeds
 
-    for feed in feeds['data']:
-        feed_list.append(feed['id'])
-        if not stream:
-            print('Feed found: ' + feed['id'] + '\n')
-            #log.write('Feed found: ' + feed['id'] + '\n')
-    
-    if 'paging' in feeds and 'next' in feeds['paging']:
-        feeds_url = feeds['paging']['next']
-        feed_list = getFeedIds(getRequests(feeds_url), feed_list)
+    if 'data' in feeds:
+        for feed in feeds['data']:
+            feed_list.append(feed['id'])
+            if not stream:
+                print('Feed found: ' + feed['id'] + '\n')
+                #log.write('Feed found: ' + feed['id'] + '\n')
+        
+        if 'paging' in feeds and 'next' in feeds['paging']:
+            feeds_url = feeds['paging']['next']
+            feed_list = getFeedIds(getRequests(feeds_url), feed_list)
+
+        return feed_list
 
     return feed_list
+##########################################################################################################
+def getShares(shares):
+    if 'shares' in shares:
+        return shares['shares']['count']
+    else:
+        return 0
 
 ##########################################################################################################
 def getComments(comments, comments_count):
@@ -35,6 +48,11 @@ def getComments(comments, comments_count):
     # If comments exist.
     comments = comments['comments'] if 'comments' in comments else comments
     if 'data' in comments:
+
+
+        if 'summary' in comments:
+            comments_count = comments['summary']['total_count']
+            return comments_count
 
         if not stream:
             comments_dir = 'comments/'
@@ -64,6 +82,7 @@ def getComments(comments, comments_count):
                 #log.write('Processing comment: ' + feed_id + '/' + comment['id'] + '\n')
 
         # Check comments has next or not.
+
         if 'next' in comments['paging']:
             comments_url = comments['paging']['next']
             comments_count = getComments(getRequests(comments_url), comments_count)
@@ -71,11 +90,22 @@ def getComments(comments, comments_count):
     return comments_count
 
 ##########################################################################################################
-def getReactions(reactions, reactions_count_dict):
+def getReactions(data, reactions_count_dict):
 
     # If reactions exist.
-    reactions = reactions['reactions'] if 'reactions' in reactions else reactions
+    reactions = data['reactions'] if 'reactions' in data else data
     if 'data' in reactions:
+        
+        if 'summary' in reactions:
+            reactions_count_dict['like']  = data['like']['summary']['total_count']
+            reactions_count_dict['love']  = data['love']['summary']['total_count']
+            reactions_count_dict['haha']  = data['haha']['summary']['total_count']
+            reactions_count_dict['wow']   = data['wow']['summary']['total_count']
+            reactions_count_dict['sad']   = data['sad']['summary']['total_count']
+            reactions_count_dict['angry'] = data['angry']['summary']['total_count']
+
+            reactions_count_dict['total'] = reactions['summary']['total_count']
+            return reactions_count_dict
 
         if not stream:
             reactions_dir = 'reactions/'
@@ -143,20 +173,30 @@ def getFeed(feed_id):
         log.close()
 
     # For comments.
-    comments_url = feed_url + '?fields=comments.limit(100)&' + token
+    if get_resume:
+        comments_url = feed_url + '?fields=comments.limit(0).summary(true)&' + token
+    else:
+        comments_url = feed_url + '?fields=comments.limit(100)&' + token    
+    
     comments_count = getComments(getRequests(comments_url), 0)
 
     # For reactions.
-    if get_reactions:
+    if get_reactions or get_resume:
         reactions_count_dict = {
             'like': 0,
             'love': 0,
             'haha': 0,
             'wow': 0,
             'sad': 0,
-            'angry': 0
+            'angry': 0,
+            'total': 0
         }
-        reactions_url = feed_url + '?fields=reactions.limit(100)&' + token
+        # For resume reactions.
+        if get_resume:
+            #reactions_url = feed_url + '?fields=reactions.limit(0).summary(true)&' + token
+            reactions_url = feed_url + '?fields=reactions.limit(0).summary(total_count),reactions.type(LIKE).summary(total_count).limit(0).as(like),reactions.type(LOVE).summary(total_count).limit(0).as(love),reactions.type(WOW).summary(total_count).limit(0).as(wow),reactions.type(HAHA).summary(total_count).limit(0).as(haha),reactions.type(SAD).summary(total_count).limit(0).as(sad),reactions.type(ANGRY).summary(total_count).limit(0).as(angry)&' + token
+        else:
+            reactions_url = feed_url + '?fields=reactions.limit(100)&' + token
         reactions_count_dict = getReactions(getRequests(reactions_url), reactions_count_dict)
     
     # For attachments.
@@ -168,6 +208,10 @@ def getFeed(feed_id):
     attachments_url = feed_url + '?fields=attachments&' + token
     attachments_content = getAttachments(getRequests(attachments_url), attachments_content)
 
+    # For shared
+    shares_url = feed_url + '?fields=shares&' + token
+    shares_count = getShares(getRequests(shares_url))
+
     # For feed content.
     feed = getRequests(feed_url + '?' + token)
 
@@ -177,12 +221,14 @@ def getFeed(feed_id):
             'message': feed['message'],
             'link': feed['link'] if 'link' in feed else None,
             'created_time': feed['created_time'],
-            'comments_count': comments_count
+            'comments_count': comments_count,
+            'shares_count': shares_count
+
         }
 
         feed_content.update(attachments_content)
 
-        if get_reactions:
+        if get_reactions or get_resume:
             feed_content.update(reactions_count_dict)
 
         if stream:
@@ -213,6 +259,7 @@ def getTarget(target):
 
     #Get list of feed id from target.
     feeds_url = 'https://graph.facebook.com/v2.7/' + target + '/?fields=feed.limit(100).since(' + since + ').until(' + until + '){id}&' + token
+    print(feeds_url)
     feed_list = getFeedIds(getRequests(feeds_url), [])
 
     if not stream:
@@ -247,8 +294,11 @@ if __name__ == '__main__':
 
     parser.add_argument("-r", "--reactions", help="Collect reactions or not. Default is no.")
     parser.add_argument("-s", "--stream", help="If yes, this crawler will turn to streaming mode.")
-
+    parser.add_argument("-resume", "--resume", help="Collect resume reactions or not. Default is no.")
+    parser.add_argument("-log", "--log", help="log path")
+    
     args = parser.parse_args()
+
 
     target = str(args.target)
     since = str(args.since)
@@ -264,6 +314,17 @@ if __name__ == '__main__':
     else:
         stream = False
 
+    if args.resume == 'yes':
+        get_resume = True
+    else:
+        get_resume = False        
+    
+    if args.log == None:
+        result_dir = 'Result/'
+    else:
+        result_dir = 'Result/'+args.log       
+
+
     app_id = 'YOUR_APP_ID'
     app_secret = 'YOUR_APP_SECRET'
 
@@ -271,7 +332,7 @@ if __name__ == '__main__':
 
     #Create a directory to restore the result if not in stream mode.
     if not stream:
-        result_dir = 'Result/'
+        #result_dir = 'Result/'+datetime.strftime(datetime.now(), '%Y%m%d%H%M%S')
         if not os.path.exists(result_dir):
             os.makedirs(result_dir)
         os.chdir(result_dir)

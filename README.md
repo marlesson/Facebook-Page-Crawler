@@ -25,10 +25,12 @@ pip install requests
 2. **since**: The date you want to start the crawling.
 3. **until**: The date you want to finish the crawling.
 
-And **two** additional parameters:
+And **three** additional parameters:
 
 1. **-r, --reactions**: Default is **no**. Set to **yes** will collect reactions data. Because the number of reactions is too large, use it **CAREFULLY!!!**
 2. **-s, --stream**: Default is **no**. Set to **yes** will turn to streaming mode.
+3. **-resume, --resume**: Collect resume reactions or not. Default is no.
+    
 
 You can use this two command to find some help:
 ```
